@@ -18,11 +18,13 @@
 import string
 import serial
 import time
+import typing
 from threading import Thread,Lock,Condition
 from .drive import DriveTask,LMCPidControlTypes
 from .status import LMCStatus
 import logging
 from enum import Enum
+import queue
 
 class LMCError(Exception):
     """
@@ -103,7 +105,7 @@ class LMCConnection:
 
     syncCommandLock:Lock = None # prevents multiple threads from issuing commands simultaneously
 
-    eventQueue:Queue = None
+    eventQueue:queue.Queue = None
 
     # current LMC status
       # not needed right now, because LMC doesn't actively send status.
@@ -123,6 +125,7 @@ class LMCConnection:
         self.RTSyncSignallingCV = Condition(self.RTSyncSignallingLock);
         self.syncCommandLock = Lock()
         self.lmcStatusLock = Lock()
+        self.eventQueue = queue.Queue()
         if logger is not None:
             self.logger = logger
         else:
@@ -316,6 +319,7 @@ class LMCConnection:
                 pktstr = pkt.decode('ascii', 'replace')
                 self.logger.info("[LMC->Host] "+pktstr)
                 pktsplit = pktstr.split()
+
                 #branch depending on message type
                 if pktsplit[0] == "ok" or pktsplit[0] == "err":
                     # Command response
@@ -325,10 +329,18 @@ class LMCConnection:
                         self.connectionBroken = None # no error
                         self.RTSyncSignallingCV.notify_all()
                     self.logger.debug("LMC Reader Thread: Response Event signaled")
+                    
                 elif pktsplit[0] == "evt":
                     self.logger.info("LMC event received: "+pktstr)
-                    # TODO parse the event type
-                    self.eventQueue.put...
+                    # parse the event type
+                    evttypestr = pktsplit[1]
+                    try:
+                        evttype = LMCEventType(evttypestr)
+                        # puts a tuple of (evttype, evtdata)
+                        self.logger.debug("Adding event to queue: type="+str(evttype)+" data="+str(pktsplit[2:]))
+                        self.eventQueue.put( (evttype, pktsplit[2:]) )
+                    except ValueError:
+                        self.logger.warning("Unknown event type received from lmc: "+pktstr)
 #                elif pktsplit[0] == "st":
 #                    status = LMCStatus(pktsplit[1:])
 #                    # update status variable
@@ -351,7 +363,7 @@ class LMCConnection:
             # reader thread exits
     
     # event queue
-    def hasPendingEvent():
+    def hasPendingEvent(self) -> bool:
         """
         Returns true if the LMC has sent an event that has not been processed by the host yet.
 
@@ -363,13 +375,35 @@ class LMCConnection:
                 ... handle the event ...
         ```
         """
-        return this.eventQueue.
-    def getNextPendingEvent() -> (LMCEventType, list(str)):
+        return not self.eventQueue.empty()
+            
+    def getNextPendingEvent(self) -> (LMCEventType, typing.List[str]):
         """
         Returns the next pending event from the LMC event queue.
         Returns a tuple of evtType, evtData
         evtType: the LMCEventType of the event
         evtData: additional data, currently only used for DRIVE_SPLINE_AT_POINT; int(evtData[0]) = index of point in spline path that has been reached.
-        """
-        return this.eventQueue.pop()                
 
+        Returns (None,None) if no event is pending.
+
+        Note: according to python's Queue docs, Queue.get may return nothing despite the queue being not empty (hasPendingEvent() is True).
+        """
+        try:
+            return self.eventQueue.get(block = False)
+        except queue.Empty:
+            return (None,None)
+    
+    def waitForNextEvent(self, timeout = None) -> (LMCEventType, typing.List[str]):
+        """
+        Waits for and returns the next event from the LMC. If an event is already pending, returns it immediately, else blocks until an event is sent by the LMC.
+
+        The optional "timeout" parameter can be used to specify a timeout in seconds. If the timeout expires, (None,None) is returned 
+        
+        Returns a tuple of evtType, evtData
+        evtType: the LMCEventType of the event
+        evtData: additional data, currently only used for DRIVE_SPLINE_AT_POINT; int(evtData[0]) = index of point in spline path that has been reached.
+        """
+        try:
+            return self.eventQueue.get(timeout = timeout)
+        except queue.Empty:
+            return (None,None)
