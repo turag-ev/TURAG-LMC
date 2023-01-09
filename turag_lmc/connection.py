@@ -4,9 +4,28 @@ import serial
 import time
 from threading import Thread,Lock,Condition
 from .drive import DriveTask,LMCPidControlTypes
+from .status import LMCStatus
 import logging
-from .errors import LMCCommandError,LMCCommunicationError
 from enum import Enum
+
+class LMCError(Exception):
+    """
+    General superclass for errors related to the LMC communication
+    """
+    pass
+
+class LMCCommunicationError(LMCError):
+    """
+    Errors regarding the communication link between Host and LMC, e.g. an IO error or link break
+    """
+    pass
+
+class LMCCommandError(LMCError):
+    """
+    Errors in command execution (invalid/out of range values, missing parameters etc.)
+    Corresponds to "err" messages from the LMC.
+    """
+    pass
 
 class LMCEventType(Enum):
     """Enum for types of events that the LMC may post"""
@@ -22,18 +41,11 @@ class LMCEventType(Enum):
 
 class LMCParameters(Enum):
     """Enum for parameter variables that can be read/set from the LMC using the 'get' and 'set' commands"""
-    SEND_STATUS = "sendstatus" # values: 1 (st messages are sent continuously) or 0 (no status messages are sent)
+    # (not implemented yet) SEND_STATUS = "sendstatus" # values: 1 (st messages are sent continuously) or 0 (no status messages are sent)
     COLLISIONS_ENABLED = "coll" # values: 1 (enabled) or 0 (disabled)
     LASER_POSE_ENABLED = "lcpose" # values: 1 (enabled) or 0 (disabled)
     WEIGHT = "weight" # value: weight in kg (float)
     MOMENT_OF_INERTIA = "momin" # value: moment of inertia in (Nm/s/s/rad) (float)
-
-class LMCStatus:
-    """
-    Class encapsulating the LMC's current status, as received by the LMC status messages
-    """
-    def __init__(self, message:list[str]) -> None:
-        pass #TODO
 
 class LMCConnection:
     """
@@ -65,9 +77,6 @@ class LMCConnection:
     # reader thread
     readerThread:Thread = None
 
-    # variable telling the connection has been started (may not do certain things afterwards)
-    isInitialized = False
-
     # various threading locks and inter-thread messaging
     RTSyncSignallingLock:Lock = None # Lock for inter-thread communication between readerThread and synchronous commands
     RTSyncSignallingCV:Condition = None # Condition variable for this
@@ -78,17 +87,20 @@ class LMCConnection:
 
     syncCommandLock:Lock = None # prevents multiple threads from issuing commands simultaneously
 
-    # current LMC status
-    lmcStatusLock:Lock = None
-    lmcStatus:LMCStatus = None
+    eventQueue:Queue = None
 
-    # callback functions
-    # registered callbacks for status messages
-    statusCallbacks = None
-    # registered callbacks for events
-    eventCallbacks = None
+    # current LMC status
+      # not needed right now, because LMC doesn't actively send status.
+    # lmcStatusLock:Lock = None
+    # lmcStatus:LMCStatus = None
 
     def __init__(self, device:string = "/dev/LMC", logger:logging.Logger = None):
+        """
+        Create a new LMC Connection. This just creates the object, the connection must be explicitly established using startConnection().
+        Parameters:
+        device: the path or identifier of the device to connect to. See the pyserial documentation for possible formats (serial.serial_for_url()).
+        logger: The python Logger instance to use to log LMC messages. If not provided, a default logger will be created that prints to stderr with log level INFO.
+        """
         self.device = device
         # init threading stuff
         self.RTSyncSignallingLock = Lock()
@@ -99,63 +111,43 @@ class LMCConnection:
             self.logger = logger
         else:
             self.logger = logging.getLogger(__name__)
-        self.logger.setLevel(logging.DEBUG)
-        strh = logging.StreamHandler()
-        strh.setLevel(logging.DEBUG)
-        self.logger.addHandler(strh)
-
-        self.statusCallbacks = [];
-        self.eventCallbacks = [];
-
-        self.logger.info("LMC communication created (device "+self.device+")")
+            self.logger.setLevel(logging.DEBUG)
+            strh = logging.StreamHandler()
+            strh.setLevel(logging.INFO)
+            self.logger.addHandler(strh)
         self.conn = serial.serial_for_url(self.device, do_not_open = True)
-
+        self.logger.info("LMC communication created (device "+self.device+")")
+        
     def startConnection(self):
         """
-        Start the LMC communication interface and connect to the LMC
-        Callbacks must be registered before calling this function
-        """
-        # Reset reader thread variables
-        with self.RTSyncSignallingCV:
-            if self.isConnected:
-                raise RuntimeError("Cannot re-start already connected LMC Connection")
-            self.connectionFault = None
-            self.commandResponse = None
-            self.isConnected = False
-        if self.conn.isOpen:
-            self.conn.close()
-        self.logger.info("Starting LMC connection...")
-        self.readerThread = Thread(target=self.readerThreadMain, name="LMC Reader Thread", daemon=True)
-        self.readerThread.start()
-        # wait until connection is established
-        with self.RTSyncSignallingCV:
-            while not self.isConnected and self.connectionFault is None:
-                self.RTSyncSignallingCV.wait()
-            if self.connectionFault is not None:
-                raise LMCCommunicationError("LMC connection couldn't be started:"+str(self.connectionFault))
-        self.isInitialized = True
+        (Re-)Start the LMC communication interface and connect to the LMC
+        This function must be called after creating the LMCConnection object to connect.
 
-    
-    def addStatusCallback(self, callback):
+        In case of a link break or other I/O error on the serial link, the interface will stop to work and throw LMCCommunicationErrors
+        You can then call startConnection() again to try to reconnect
+
+        This function does not return until a connection is established and the protocol version of the LMC has been confirmed ('version' command).
+        If one of these steps fail, this function throws an LMCCommunicationError.
         """
-        Add a callback function that is called whenever the LMC posts a Status message
-        Callback function signature is: callback(lmcStatus: LMCStatus)
-        Must be called before initAndConnect()
-        Be aware that the callback functions get called from the LMC reader thread!
-        """
-        if self.isInitialized:
-            raise RuntimeError("Cannot add callbacks to already started LMC Connection")
-        self.statusCallbacks.append(callback)
-    def addEventCallback(self, callback):
-        """
-        Add a callback function that is called whenever the LMC posts an Event
-        Callback function signature is: callback(evtType: LMCEventType, evtData: List of Strings)
-        Must be called before initAndConnect()
-        Be aware that the callback functions get called from the LMC reader thread!
-        """
-        if self.isInitialized:
-            raise RuntimeError("Cannot add callbacks to already started LMC Connection")
-        self.eventCallbacks.append(callback)
+        with self.syncCommandLock: # we may not enter this while a sync command is being executed
+            # Reset reader thread variables
+            with self.RTSyncSignallingCV:
+                if self.isConnected:
+                    raise RuntimeError("Cannot re-start already connected LMC Connection")
+                self.connectionFault = None
+                self.commandResponse = None
+                self.isConnected = False
+            if self.conn.isOpen:
+                self.conn.close()
+            self.logger.info("Starting LMC connection...")
+            self.readerThread = Thread(target=self.readerThreadMain, name="LMC Reader Thread", daemon=True)
+            self.readerThread.start()
+            # wait until connection is established
+            with self.RTSyncSignallingCV:
+                while not self.isConnected and self.connectionFault is None:
+                    self.RTSyncSignallingCV.wait()
+                if self.connectionFault is not None:
+                    raise LMCCommunicationError("LMC connection couldn't be started:"+str(self.connectionFault))
 
     def getParameter(self, param:LMCParameters):
         """Retrieve a parameter from the LMC"""
@@ -170,7 +162,20 @@ class LMCConnection:
     def issueDriveTask(self, driveTask:DriveTask):
         """
         Issues the given DriveTask to the LMC.
-        Does not await the completion of the drive task
+
+        A DriveTask is a driving action that the LMC can execute in one go, for example:
+        * Drive continuously with a constant velocity (DriveConstantVelocityTask)
+        * Drive a certain distance (DriveDistanceTask)
+        * Drive to a pose (using the internal odometry) (DrivePoseTask)
+        * Drive along a spline of multiple points (DriveSplineTask)
+
+        This function returns immediately after the LMC has accepted the new drive task. It does not block for its completion.
+
+        The completion and result of a drive task is signalled by the DRIVE_ family of events, using the event mechanism (see getNextPendingEvent()).
+
+        Issuing a DriveTask cancels any other active drive task that the LMC may be running at this time. If a queue of drive tasks is required, you need to implement it yourself.
+        For example, to drive a triangle (while NOT using a spline), you need to issue 3 DrivePoseTasks in total and, before sending the next one, wait until the DRIVE_SUCCESS event is received.
+        Note: As only exception a spline, although comprised of multiple points, is one atomic drive action.
         """
         driveTask.execute(self)
         return
@@ -197,31 +202,26 @@ class LMCConnection:
         """
         self.syncCommand(f"setodometry {left_radius} {right_radius} {wheel_dist}")
 
-    def getLmcStatus(self):
+    def fetchLmcStatus(self, extended:bool = False):
         """
-        Get the current LMC status, as received by the last status message from the LMC
+        Fetch the current LMC status from the LMC
+        The Status contains the operation state and current pose.
+        When the "extended" parameter is True, the status also contains information about encoder distance, velocity, force, motor currents and PWM. See the LMCStatus class for more info.
         """
-        with self.lmcStatusLock:
-            status = self.lmcStatus
-        return status
-
-    def fetchLmcStatus(self):
-        """
-        Synchronously fetch the LMC status (using st command)
-        """
-        #TODO implement on LMC side
-        st = self.syncCommand("st")
-        status = LMCStatus(st)
-        # update status var
-        with self.lmcStatusLock:
-            self.lmcStatus = status
-        return status
+        if extended:
+            st = self.syncCommand("stx")
+        else:
+            st = self.syncCommand("st")
+        try:
+            return LMCStatus(st)
+        except Exception as e:
+            raise LMCCommandError("Could not parse LMC status", e)
 
     def syncCommand(self, command:str, timeout:float = 2):
         """
-        Sends the given command to the LMC and blocks until an answer is received.
+        Sends the given raw command to the LMC and blocks until an answer is received.
         If the answer is 'ok', returns a list of strings representing the returned values
-        If the answer is 'err', raises an exception
+        If the answer is 'err', raises an LMCCommandException containing the error information.
         """
         if not self.isInitialized:
             raise RuntimeError("LMC Connection is not started (call startConnection() first)")
@@ -235,6 +235,7 @@ class LMCConnection:
                     raise LMCCommunicationError("LMC is not connected, call startConnection() first!")
                 try:
                     # write the command on the wire
+                    self.logger.info("[Host->LMC] "+command)
                     self.conn.write(command.encode('ascii') + b'\n')
                 except serial.SerialException as e:
                     self.logger.warning("syncCommand: Sending command failed: "+str(e))
@@ -263,7 +264,6 @@ class LMCConnection:
         Main function of the reader thread
         The reader thread reads the replies, events and status messages of the LMC
         """
-        # aquire the sync lock, so that other threads to not attempt to start commands during reconnection
         try:
             self.conn.open()
             # Connection self test, run an echo command
@@ -272,12 +272,14 @@ class LMCConnection:
             # wait a moment for LMC to process it
             time.sleep(0.2)
             self.conn.read_all() # empty buffer
-            #self.conn.write("version\n".encode('ascii'))
-            #line = self.conn.readline().decode('ascii')
-            #if line.startswith("ok"):
-            #    self.logger.info("LMC reports version: "+line)
-            #else:
-            #    raise RuntimeError(f"LMC version check failed, got '{line}'")
+            self.logger.info("[Host->LMC] version")
+            self.conn.write("version\n".encode('ascii'))
+            line = self.conn.readline().decode('ascii')
+            self.logger.info("[LMC->Host] "+line)
+            if line.startswith("ok"):
+                self.logger.info("LMC reports version: "+line)
+            else:
+                raise RuntimeError(f"LMC version check failed, got '{line}'")
             # successful
         except Exception as e:
             self.logger.critical(f"Connecting to LMC failed : {str(e)}")
@@ -296,7 +298,7 @@ class LMCConnection:
                 self.logger.debug("LMC Reader Thread: Now entering blocking read")
                 pkt = self.conn.read_until(b'\n')
                 pktstr = pkt.decode('ascii', 'replace')
-                self.logger.debug("LMC Reader Thread: received packet: "+pktstr)
+                self.logger.info("[LMC->Host] "+pktstr)
                 pktsplit = pktstr.split()
                 #branch depending on message type
                 if pktsplit[0] == "ok" or pktsplit[0] == "err":
@@ -309,16 +311,16 @@ class LMCConnection:
                     self.logger.debug("LMC Reader Thread: Response Event signaled")
                 elif pktsplit[0] == "evt":
                     self.logger.info("LMC event received: "+pktstr)
-                    for cb in self.eventCallbacks:
-                        cb(pktsplit[1:])
-                elif pktsplit[0] == "st":
-                    status = LMCStatus(pktsplit[1:])
-                    # update status variable
-                    with self.lmcStatusLock:
-                        self.lmcStatus = status
-                    # call callbacks
-                    for cb in self.statusCallbacks:
-                        cb(status)
+                    # TODO parse the event type
+                    self.eventQueue.put...
+#                elif pktsplit[0] == "st":
+#                    status = LMCStatus(pktsplit[1:])
+#                    # update status variable
+#                    with self.lmcStatusLock:
+#                        self.lmcStatus = status
+#                    # call callbacks
+#                    for cb in self.statusCallbacks:
+#                        cb(status)
                 else:
                     self.logger.warning("Unknown answer opcode received from lmc: "+pktstr)
             # end inner loop
@@ -331,6 +333,27 @@ class LMCConnection:
                 self.isConnected = False
                 self.RTSyncSignallingCV.notify_all()
             # reader thread exits
-                
-                
+    
+    # event queue
+    def hasPendingEvent():
+        """
+        Returns true if the LMC has sent an event that has not been processed by the host yet.
+
+        The host code needs to regularily poll for events from the LMC. It is suggested that you include code similar to the following into your main loop:
+        ```
+        while lmc.hasPendingEvent():
+            evtType, evtData = lmc.getNextPendingEvent()
+            if evtType == LMCEventType.DRIVE_SUCCESS:
+                ... handle the event ...
+        ```
+        """
+        return this.eventQueue.
+    def getNextPendingEvent() -> (LMCEventType, list(str)):
+        """
+        Returns the next pending event from the LMC event queue.
+        Returns a tuple of evtType, evtData
+        evtType: the LMCEventType of the event
+        evtData: additional data, currently only used for DRIVE_SPLINE_AT_POINT; int(evtData[0]) = index of point in spline path that has been reached.
+        """
+        return this.eventQueue.pop()                
 

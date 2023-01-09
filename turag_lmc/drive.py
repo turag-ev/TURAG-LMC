@@ -69,6 +69,8 @@ class Pose:
             return str(self.x)+","+str(self.y)+",x"
         else:
             return str(self.x)+","+str(self.y)+","+str(self.angle)
+    def __str__(self) -> str:
+        return f"x={self.x: 6d} y={self.y: 6d} a={self.angle: 5d}°"
 
 class DriveRamp:
     """
@@ -101,12 +103,6 @@ class DR:
     RAMP_SLOW   = DriveRamp(0.3, 1.0,  2.4,   7.2)
     RAMP_MEDIUM = DriveRamp(0.6, 1.0,  4.8,  14.4)
     RAMP_FAST   = DriveRamp(1.0, 1.5,  6.0,  18.0)
-
-    ramp_dict = {
-        "slow": RAMP_SLOW,
-        "medium": RAMP_MEDIUM,
-        "fast": RAMP_FAST
-    }
     # TODO: please delete when you define drive ramps elsewhere
 
 
@@ -206,7 +202,7 @@ class DriveTransVelTask(DriveTask):
     """
     Drive forward using the velocity regulation only
     Length is the total area under the velocity ramp (used only for ramp calculation)
-    length unit: m
+    length unit: mm
     """
     def __init__(self, length:float, ramp:DriveRamp):
         super().__init__(ramp)
@@ -217,7 +213,7 @@ class DriveRotVelTask(DriveTask):
     """
     Rotate bot using the velocity regulation only
     Angle is the total area under the angular velocity ramp (used only for ramp calculation)
-    angle unit: rad
+    angle unit: deg
     """
     def __init__(self, angle:float, ramp:DriveRamp):
         super().__init__(ramp)
@@ -228,7 +224,7 @@ class DriveRotVelTask(DriveTask):
 class DriveDistanceTask(DriveTask):
     """
     Drive forward for a fixed length
-    length unit: m
+    length unit: mm
     """
     def __init__(self, length:float, ramp:DriveRamp):
         super().__init__(ramp)
@@ -239,7 +235,7 @@ class DriveDistanceTask(DriveTask):
 class DriveAngleTask(DriveTask):
     """
     Rotate bot by a fixed relative angle
-    angle unit: rad
+    angle unit: deg
     """
     def __init__(self, angle:float, ramp:DriveRamp):
         super().__init__(ramp)
@@ -254,6 +250,7 @@ class DrivePoseTask(DriveTask):
     If pose angle is ANY_ANGLE, final turn is omitted
 
     Drive flags applicable:
+    FORWARD (0, default): robot drives forwards
     BACKWARD: robot drives backwards
     KANAYAMA: enable the Kanayama algorithm (continuously corrects path alignment, should usually be enabled)
     """
@@ -269,10 +266,13 @@ class DriveSplineTask(DriveTask):
     Drive along the given poses (pose_list), following a spline
 
     Drive flags applicable:
+    FORWARD (0, default): robot drives forwards
     BACKWARD: robot drives backwards
     LONG_TURN_START: ??TODO
     LONG_TURN_END: ??TODO
-    Note: KANAYAMA flag is ignored and is always enabled
+    Note: KANAYAMA flag is ignored and is always enabled (it is required for spline driving)
+
+    The maximum number of positions in the pose list is 25.
     """
     def __init__(self, pose_list:list[Pose], drive_flags:int, ramp:DriveRamp):
         super().__init__(ramp)
@@ -300,6 +300,7 @@ class DriveForce(DriveTask):
     Drive forward with a given force (translational) and torque (rotational)
     Only use this to drive against a wall or other fixed object!
     force unit: N
+    torque unit: Nm
     """
     def __init__(self, force:float, torque:float):
         self.force = force
@@ -321,13 +322,17 @@ class DriveReleaseTask(DriveTask):
     """
     Release the wheels, so that the robot can roll freely
     """
+    def __init__(self):
+        pass
     def _toLmcMessage(self):
         return "drive release"
 
 class DriveEmergencyStopTask(DriveTask):
     """
-    Immediately brake and stop the robot the hard way
+    Immediately brake and stop the robot
     """
+    def __init__(self):
+        pass
     def _toLmcMessage(self):
         return "drive estop"
 
@@ -335,13 +340,15 @@ class DriveSoftStopTask(DriveTask):
     """
     Immediately brake and stop the robot softly
     """
+    def __init__(self):
+        pass
     def _toLmcMessage(self):
         return "drive softstop"
 
 class DrivePwmTask(DriveTask):
     """
     Directly set the PWM duty cycles of the wheels
-    left and right are the duty cycles as fraction (range 0.0 - 1.0)
+    left and right are the duty cycles as fraction (range -1.0 - 1.0)
     """
     def __init__(self, left:float, right:float):
         self.left = left
@@ -353,11 +360,12 @@ class DriveSquareTask(DriveTask):
     """
     Drive a square
     Don't ask me why this is a dedicated drive task, as the same can be done with 4 DriveDist and 4 DriveAngle tasks.
+    length unit: mm
     """
     def __init__(self, length:float, counterclockwise:bool, ramp:DriveRamp):
         super().__init__(ramp)
         self.length = length
         self.counterclockwise = counterclockwise
     def _toLmcMessage(self):
-        return "drive pwm %s %d %s %s %s %s" % (self.length, 1 if self.counterclockwise else -1, self.ramp.v_max, self.ramp.a_max, self.ramp.ang_v_max, self.ramp.ang_a_max)
+        return "drive square %s %d %s %s %s %s" % (self.length, 1 if self.counterclockwise else -1, self.ramp.v_max, self.ramp.a_max, self.ramp.ang_v_max, self.ramp.ang_a_max)
 
