@@ -312,7 +312,7 @@ class DriveSplineTask(DriveTask):
     def _toLmcMessage(self):
         return "drive spline go %d %s %s %s %s" % (self.drive_flags, self.ramp.v_max, self.ramp.a_max, self.ramp.ang_v_max, self.ramp.ang_a_max)
 
-class DriveForce(DriveTask):
+class DriveForceTask(DriveTask):
     """
     Drive forward with a given force (translational) and torque (rotational)
     Only use this to drive against a wall or other fixed object!
