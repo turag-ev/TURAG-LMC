@@ -242,8 +242,6 @@ class LMCConnection:
         If the answer is 'ok', returns a list of strings representing the returned values
         If the answer is 'err', raises an LMCCommandException containing the error information.
         """
-        if not self.isInitialized:
-            raise RuntimeError("LMC Connection is not started (call startConnection() first)")
         with self.syncCommandLock: # only one command at a time!
             # wait for reader thread availability (do not attempt things during reconnection)
             with self.RTSyncSignallingCV: # acquire the condition variable
@@ -291,6 +289,8 @@ class LMCConnection:
             # wait a moment for LMC to process it
             time.sleep(0.2)
             self.conn.read_all() # empty buffer
+            # for this call only, set the timeout
+            self.conn.timeout = 2.0
             self.logger.info("[Host->LMC] version")
             self.conn.write("version\n".encode('ascii'))
             line = self.conn.readline().decode('ascii')
@@ -298,7 +298,10 @@ class LMCConnection:
             if line.startswith("ok"):
                 self.logger.info("LMC reports version: "+line)
             else:
+                # timeout will fall into this line as well
                 raise RuntimeError(f"LMC version check failed, got '{line}'")
+            # reset the timeout
+            self.conn.timeout = None
             # successful
         except Exception as e:
             self.logger.critical(f"Connecting to LMC failed : {str(e)}")
@@ -352,13 +355,15 @@ class LMCConnection:
                 else:
                     self.logger.warning("Unknown answer opcode received from lmc: "+pktstr)
             # end inner loop
-        except serial.SerialException as e:
+        except Exception as e:
             self.logger.critical(f"LMC Connection lost: {str(e)}")
             # If a synchronous command is already in the making, we need to wake it up
             with self.RTSyncSignallingCV:
                 self.connectionFault = e
                 self.commandResponse = None
                 self.isConnected = False
+                # connection must be closed so linux can reassign the device file
+                self.conn.close()
                 self.RTSyncSignallingCV.notify_all()
             # reader thread exits
     
