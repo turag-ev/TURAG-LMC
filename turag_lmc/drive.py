@@ -117,9 +117,9 @@ class DriveRamp:
 class DR:
     # default drive ramps from old systemcontrol
     #                       m/s  m/s^2 rad/s rad/s^2
-    RAMP_SLOW   = DriveRamp(0.3, 1.0,  2.4,   7.2)
-    RAMP_MEDIUM = DriveRamp(0.6, 1.0,  4.8,  14.4)
-    RAMP_FAST   = DriveRamp(1.0, 1.5,  6.0,  18.0)
+    RAMP_SLOW   = DriveRamp(0.2, 0.5,  2.0,  2.0)
+    RAMP_MEDIUM = DriveRamp(0.8, 1.0,  4.0,  4.0)
+    RAMP_FAST   = DriveRamp(1.0, 1.2,  4.0,  4.0)
     # TODO: please delete when you define drive ramps elsewhere
 
 
