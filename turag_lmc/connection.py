@@ -429,12 +429,13 @@ class LMCConnection:
         """
         return not self.eventQueue.empty()
 
-    def getNextPendingEvent(self) -> tuple(LMCEventType, typing.List[str]):
+    def getNextPendingEvent(self) -> tuple():
         """
         Returns the next pending event from the LMC event queue.
         Returns a tuple of evtType, evtData
         evtType: the LMCEventType of the event
         evtData: additional data, currently only used for DRIVE_SPLINE_AT_POINT; int(evtData[0]) = index of point in spline path that has been reached.
+        removed annotation: -> tuple(LMCEventType, typing.List[str])
 
         Returns (None,None) if no event is pending.
 
@@ -445,7 +446,7 @@ class LMCConnection:
         except queue.Empty:
             return (None, None)
 
-    def waitForNextEvent(self, timeout=None) -> tuple(LMCEventType, typing.List[str]):
+    def waitForNextEvent(self, timeout=None) -> tuple():
         """
         Waits for and returns the next event from the LMC. If an event is already pending, returns it immediately, else blocks until an event is sent by the LMC.
 
@@ -454,6 +455,7 @@ class LMCConnection:
         Returns a tuple of evtType, evtData
         evtType: the LMCEventType of the event
         evtData: additional data, currently only used for DRIVE_SPLINE_AT_POINT; int(evtData[0]) = index of point in spline path that has been reached.
+        removed annotation: -> tuple(LMCEventType, typing.List[str])
         """
         try:
             return self.eventQueue.get(timeout=timeout)
