@@ -59,6 +59,7 @@ class LMCEventType(Enum):
 
     # drive results
     DRIVE_SUCCESS = "d_success"
+    DRIVE_COLLISION = "d_collision"
     DRIVE_FAILED = "d_failed"
     DRIVE_SPLINE_AT_POINT = "d_spoint"
     DRIVE_REJECTED = "d_rejected"
