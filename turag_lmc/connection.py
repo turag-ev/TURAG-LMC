@@ -172,9 +172,8 @@ class LMCConnection:
                 self.connectionFault = None
                 self.commandResponse = None
                 self.isConnected = False
-            if self.conn.isOpen:
+            if self.conn.is_open:
                 self.conn.close()
-            self.logger.info("Starting LMC connection...")
             self.readerThread = Thread(
                 target=self.readerThreadMain, name="LMC Reader Thread", daemon=True
             )
@@ -188,6 +187,7 @@ class LMCConnection:
                         "LMC connection couldn't be started:"
                         + str(self.connectionFault)
                     )
+            self.logger.info("Starting LMC connection...")
 
     def getParameter(self, param: LMCParameters):
         """Retrieve a parameter from the LMC"""
